@@ -77,9 +77,13 @@ module NextRails
     def created_at
       @created_at ||= begin
         local_date = gem_specification.date
-        valid_date?(local_date) ? local_date : fetch_release_date_from_rubygems
+        if valid_date?(local_date)
+          local_date
+        else
+          fetch_release_date_from_gemspec_file || fetch_release_date_from_rubygems
+        end
       rescue StandardError
-        fetch_release_date_from_rubygems
+        fetch_release_date_from_gemspec_file || fetch_release_date_from_rubygems
       end
     end
 
@@ -169,6 +173,21 @@ module NextRails
 
     def valid_date?(time)
       time.is_a?(Time) && time >= RELEASE_DATE_THRESHOLD
+    end
+
+    def fetch_release_date_from_gemspec_file
+      path = gem_specification.loaded_from
+      return nil unless path && File.readable?(path)
+
+      content = File.read(path)
+      match = content.match(/\.date\s*=\s*["'](\d{4}-\d{2}-\d{2})["']/)
+      return nil unless match
+
+      year, month, day = match[1].split('-').map(&:to_i)
+      date = Time.utc(year, month, day)
+      valid_date?(date) ? date : nil
+    rescue StandardError
+      nil
     end
 
     def fetch_release_date_from_rubygems
