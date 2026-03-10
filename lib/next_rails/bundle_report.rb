@@ -63,7 +63,7 @@ module NextRails
 
     def outdated(format = nil)
       gems = NextRails::GemInfo.all
-      out_of_date_gems = gems.reject(&:up_to_date?).sort_by(&:created_at)
+      out_of_date_gems = gems.reject(&:up_to_date?).sort_by { |g| g.created_at || Time.at(0) }
       sourced_from_git = gems.select(&:sourced_from_git?)
 
       if format == 'json'

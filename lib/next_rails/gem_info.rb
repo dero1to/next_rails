@@ -1,5 +1,11 @@
+require 'net/http'
+require 'json'
+require 'time'
+
 module NextRails
   class GemInfo
+    RELEASE_DATE_THRESHOLD = Time.utc(2000, 1, 1).freeze
+
     class NullGemInfo < GemInfo
       def initialize; end
 
@@ -59,6 +65,8 @@ module NextRails
     end
 
     def age
+      return "unknown" unless valid_date?(created_at)
+
       created_at.strftime("%b %e, %Y")
     end
 
@@ -67,7 +75,12 @@ module NextRails
     end
 
     def created_at
-      @created_at ||= gem_specification.date
+      @created_at ||= begin
+        local_date = gem_specification.date
+        valid_date?(local_date) ? local_date : fetch_release_date_from_rubygems
+      rescue StandardError
+        fetch_release_date_from_rubygems
+      end
     end
 
     def up_to_date?
@@ -150,6 +163,26 @@ module NextRails
 
     def compatible_with_ruby?(ruby_version)
       gem_specification.required_ruby_version.satisfied_by?(Gem::Version.new(ruby_version))
+    end
+
+    private
+
+    def valid_date?(time)
+      time.is_a?(Time) && time >= RELEASE_DATE_THRESHOLD
+    end
+
+    def fetch_release_date_from_rubygems
+      uri = URI("https://rubygems.org/api/v1/versions/#{URI.encode_www_form_component(name)}.json")
+      response = Net::HTTP.get_response(uri)
+      return nil unless response.is_a?(Net::HTTPSuccess)
+
+      versions = JSON.parse(response.body)
+      version_data = versions.find { |v| v["number"] == version.to_s }
+      return nil unless version_data && version_data["created_at"]
+
+      Time.iso8601(version_data["created_at"])
+    rescue StandardError
+      nil
     end
   end
 end
