@@ -23,10 +23,142 @@ RSpec.describe NextRails::GemInfo do
       end
     end
 
-    let(:result) { now.strftime("%b %e, %Y") }
+    let(:result) { release_date.strftime("%b %e, %Y") }
 
-    it "returns a date" do
+    it "returns a date when the local gemspec date is valid" do
       expect(subject.age).to eq(result)
+    end
+
+    context "when the local gemspec date is before year 2000 (e.g. Docker container reset timestamp)" do
+      let(:invalid_date) { Time.utc(1980, 1, 2, 0, 0, 0) }
+      let(:spec) do
+        Gem::Specification.new do |s|
+          s.name = "mygem"
+          s.date = invalid_date
+          s.version = "1.0.0"
+        end
+      end
+
+      context "and the RubyGems API returns a valid ISO8601 timestamp with milliseconds" do
+        let(:api_created_at) { "2026-01-08T20:18:04.374Z" }
+
+        before do
+          stub_request(:get, "https://rubygems.org/api/v1/versions/mygem.json")
+            .to_return(
+              status: 200,
+              body: JSON.generate([{ "number" => "1.0.0", "created_at" => api_created_at }]),
+              headers: { "Content-Type" => "application/json" }
+            )
+        end
+
+        it "returns the date from the API" do
+          expected = Time.iso8601(api_created_at).strftime("%b %e, %Y")
+          expect(subject.age).to eq(expected)
+        end
+      end
+
+      context "and the RubyGems API returns no matching version" do
+        before do
+          stub_request(:get, "https://rubygems.org/api/v1/versions/mygem.json")
+            .to_return(
+              status: 200,
+              body: JSON.generate([{ "number" => "2.0.0", "created_at" => "2026-01-01T00:00:00.000Z" }]),
+              headers: { "Content-Type" => "application/json" }
+            )
+        end
+
+        it "returns 'unknown'" do
+          expect(subject.age).to eq("unknown")
+        end
+      end
+
+      context "and the RubyGems API request fails" do
+        before do
+          stub_request(:get, "https://rubygems.org/api/v1/versions/mygem.json")
+            .to_return(status: 500)
+        end
+
+        it "returns 'unknown'" do
+          expect(subject.age).to eq("unknown")
+        end
+      end
+
+      context "and the created_at field is missing from the API response" do
+        before do
+          stub_request(:get, "https://rubygems.org/api/v1/versions/mygem.json")
+            .to_return(
+              status: 200,
+              body: JSON.generate([{ "number" => "1.0.0" }]),
+              headers: { "Content-Type" => "application/json" }
+            )
+        end
+
+        it "returns 'unknown'" do
+          expect(subject.age).to eq("unknown")
+        end
+      end
+    end
+  end
+
+  describe "#created_at" do
+    context "when the local gemspec date is valid (>= year 2000)" do
+      it "returns the gemspec date without making an API call" do
+        expect(subject.created_at).to eq(release_date)
+        expect(WebMock).not_to have_requested(:get, /rubygems.org\/api\/v1\/versions/)
+      end
+    end
+
+    context "when the local gemspec date is invalid (before year 2000)" do
+      let(:invalid_date) { Time.utc(1980, 1, 2, 0, 0, 0) }
+      let(:api_created_at) { "2026-01-08T20:18:04.374Z" }
+      let(:spec) do
+        Gem::Specification.new do |s|
+          s.name = "mygem"
+          s.date = invalid_date
+          s.version = "1.0.0"
+        end
+      end
+
+      before do
+        stub_request(:get, "https://rubygems.org/api/v1/versions/mygem.json")
+          .to_return(
+            status: 200,
+            body: JSON.generate([{ "number" => "1.0.0", "created_at" => api_created_at }]),
+            headers: { "Content-Type" => "application/json" }
+          )
+      end
+
+      it "fetches the date from the RubyGems API" do
+        expect(subject.created_at).to eq(Time.iso8601(api_created_at))
+      end
+
+      it "correctly parses ISO8601 timestamps with milliseconds and trailing Z" do
+        result = subject.created_at
+        expect(result).to be_a(Time)
+        expect(result.utc.year).to eq(2026)
+        expect(result.utc.month).to eq(1)
+        expect(result.utc.day).to eq(8)
+      end
+    end
+
+    context "when the API call fails" do
+      let(:invalid_date) { Time.utc(1980, 1, 2, 0, 0, 0) }
+      let(:spec) do
+        Gem::Specification.new do |s|
+          s.name = "mygem"
+          s.date = invalid_date
+          s.version = "1.0.0"
+        end
+      end
+
+      before do
+        stub_request(:get, "https://rubygems.org/api/v1/versions/mygem.json")
+          .to_raise(StandardError)
+      end
+
+      it "returns nil" do
+        expect(subject.created_at).to be_nil
+      end
     end
   end
 
